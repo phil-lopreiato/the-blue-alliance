@@ -1,10 +1,28 @@
+import logging
 import types
-from typing import Generic, Optional, TypeVar
+from typing import Awaitable, Any, Generic, Generator, Optional, TypeVar, overload
 
+from google.appengine.api import apiproxy_rpc
+from google.appengine.api.apiproxy_stub_map import UserRPC
 from google.appengine.ext import ndb
 
 
 T = TypeVar("T")
+
+
+class AwaitableRPC(Awaitable):
+    def __init__(self, rpc: UserRPC) -> None:
+        self.rpc = rpc
+
+    def __await__(self) -> Generator[Any, None, Any]:
+        while self.rpc.state == apiproxy_rpc.RPC.RUNNING:
+            yield
+        if self.rpc.state == apiproxy_rpc.RPC.RUNNING:
+            raise RuntimeError("await wasn't used with future!")
+        return self._transform_response(self.rpc.get_result())
+
+    def _transform_response(self, resp):
+        return resp
 
 
 class TypedFuture(ndb.Future, Generic[T]):
@@ -31,6 +49,31 @@ class TypedFuture(ndb.Future, Generic[T]):
 
     def get_traceback(self) -> Optional[types.TracebackType]:
         return super().get_traceback()
+
+
+class AwaitableFuture(Generic[T], Awaitable[T]):
+
+    @overload
+    def __init__(self, future: TypedFuture[T]) -> None:
+        ...
+
+    @overload
+    def __init__(self, future: ndb.Future) -> None:
+        ...
+
+    def __init__(self, future) -> None:
+        self.future = future
+
+    def __await__(self) -> Generator[Any, None, T]:
+        ev = ndb.eventloop.get_event_loop()
+        while not self.future.done():
+            if not ev.run1():
+                logging.info('Deadlock in %s', self)
+                raise RuntimeError('Deadlock waiting for %s' % self)
+            yield
+        if not self.future.done():
+            raise RuntimeError("await wasn't used with future!")
+        return self.future.get_result()
 
 
 class InstantFuture(TypedFuture[T], Generic[T]):
