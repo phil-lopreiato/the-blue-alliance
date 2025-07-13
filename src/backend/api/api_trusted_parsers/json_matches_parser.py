@@ -8,6 +8,7 @@ from typing import (
     MutableSequence,
     Optional,
     Sequence,
+    Tuple,
     TypedDict,
 )
 
@@ -16,9 +17,11 @@ from pyre_extensions import safe_json
 from backend.common.consts.alliance_color import AllianceColor
 from backend.common.consts.comp_level import COMP_LEVELS, CompLevel
 from backend.common.datafeed_parsers.exceptions import ParserInputException
+from backend.common.helpers.playoff_type_helper import PlayoffTypeHelper
 from backend.common.helpers.score_breakdown_keys import ScoreBreakdownKeys
 from backend.common.models.alliance import MatchAlliance
-from backend.common.models.keys import TeamKey, Year
+from backend.common.models.event import Event
+from backend.common.models.keys import TeamKey
 from backend.common.models.team import Team
 
 
@@ -47,7 +50,7 @@ class ParsedMatch(TypedDict):
 
 class JSONMatchesParser:
     @staticmethod
-    def parse(matches_json: AnyStr, year: Year) -> Sequence[ParsedMatch]:
+    def parse(matches_json: AnyStr, event: Event) -> Sequence[ParsedMatch]:
         """
         Parse JSON that contains a list of matches for a given year where each match is a dict of:
         comp_level: String in the set {"qm", "ef", "qf", "sf", "f"}
@@ -58,6 +61,7 @@ class JSONMatchesParser:
         time_string: String in the format "(H)H:MM AM/PM" for when the match will be played in the event's local timezone. ex: "9:15 AM"
         time: UTC time of the match as a string in ISO 8601 format (YYYY-MM-DDTHH:MM:SS).
         """
+        year = event.year
         VALID_BREAKDOWN_KEYS: set[str] = (
             ScoreBreakdownKeys.get_valid_score_breakdown_keys(year)
         )
@@ -72,29 +76,12 @@ class JSONMatchesParser:
             if type(match) is not dict:
                 raise ParserInputException("Matches must be dicts.")
 
-            comp_level = match.get("comp_level", None)
-            set_number = match.get("set_number", None)
-            match_number = match.get("match_number", None)
+            (comp_level, set_number, match_number) = JSONMatchesParser._get_match_identifier(event, match)
             alliances = match.get("alliances", None)
             score_breakdown = match.get("score_breakdown", None)
             time_string = match.get("time_string", None)
             time_utc = match.get("time_utc", None)
             display_name = match.get("display_name", None)
-
-            if comp_level is None:
-                raise ParserInputException("Match must have a 'comp_level'")
-            if comp_level not in COMP_LEVELS:
-                raise ParserInputException(
-                    "'comp_level' must be one of: {}".format(COMP_LEVELS)
-                )
-
-            if comp_level == "qm":
-                set_number = 1
-            elif set_number is None or type(set_number) is not int:
-                raise ParserInputException("Match must have an integer 'set_number'")
-
-            if match_number is None or type(match_number) is not int:
-                raise ParserInputException("Match must have an integer 'match_number'")
 
             if type(alliances) is not dict:
                 raise ParserInputException("'alliances' must be a dict")
@@ -208,3 +195,33 @@ class JSONMatchesParser:
 
             parsed_matches.append(parsed_match)
         return parsed_matches
+
+    @staticmethod
+    def _get_match_identifier(event: Event, match: Dict[Any, Any]) -> Tuple[CompLevel, int, int]:
+        if level := match.get("tournamentLevel"):
+            comp_level = PlayoffTypeHelper.get_comp_level(
+                event.playoff_type, level, match["matchNumber"]
+            )
+            set_number, match_number = PlayoffTypeHelper.get_set_match_number(
+                event.playoff_type, comp_level, match["matchNumber"]
+            )
+
+        comp_level = match.get("comp_level", None)
+        set_number = match.get("set_number", None)
+        match_number = match.get("match_number", None)
+
+        if comp_level is None:
+            raise ParserInputException("Match must have a 'comp_level'")
+        if comp_level not in COMP_LEVELS:
+            raise ParserInputException(
+                "'comp_level' must be one of: {}".format(COMP_LEVELS)
+            )
+
+        if comp_level == "qm":
+            set_number = 1
+        elif set_number is None or type(set_number) is not int:
+            raise ParserInputException("Match must have an integer 'set_number'")
+
+        if match_number is None or type(match_number) is not int:
+            raise ParserInputException("Match must have an integer 'match_number'")
+        return (comp_level, set_number, match_number)

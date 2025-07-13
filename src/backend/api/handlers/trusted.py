@@ -212,7 +212,7 @@ def update_event_awards(event_key: EventKey) -> Response:
 def update_event_matches(event_key: EventKey) -> Response:
     event_key = EventCodeExceptions.resolve(event_key)
     event: Event = none_throws(Event.get_by_id(event_key))
-    parsed_matches = JSONMatchesParser.parse(request.data, event.year)
+    parsed_matches = JSONMatchesParser.parse(request.data, event)
 
     matches: List[Match] = []
     needs_time: List[Match] = []
